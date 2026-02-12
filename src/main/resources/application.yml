@@ -1,0 +1,25 @@
+spring:
+  application:
+    name: stock-monitor
+  datasource:
+    url: jdbc:h2:mem:testdb
+    driver-class-name: org.h2.Driver
+    username: user
+    password: password
+
+  h2:
+    console:
+      enabled: true
+
+  sql:
+    init:
+      mode: always
+      schema-locations: classpath:db/schema.sql
+      data-locations: classpath:db/data.sql
+
+stock:
+  api:
+    base-url: https://stockprices.dev/api/stocks
+
+server:
+  port: 8080
