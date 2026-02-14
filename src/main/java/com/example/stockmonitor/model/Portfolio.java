@@ -9,6 +9,7 @@ import java.util.List;
 @NoArgsConstructor
 public class Portfolio {
     private Long id;
+    private Long userId;
     private String name;
     private List<Holding> holdings;
 }

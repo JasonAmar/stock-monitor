@@ -25,9 +25,13 @@ public class PriceService {
 
         List<String> symbols = List.of("AAPL", "TSLA", "MSFT");
 
-        symbols.parallelStream().forEach(symbol -> {
-            StockPrice price = stockApiClient.fetch(symbol);
-            priceRepository.save(price);
-        });
+        try {
+            symbols.parallelStream().forEach(symbol -> {
+                StockPrice price = stockApiClient.fetch(symbol);
+                priceRepository.save(price);
+            });
+        } catch (Exception ex) {
+            System.out.println(ex.getMessage());
+        }
     }
 }

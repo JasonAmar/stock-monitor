@@ -1,7 +1,6 @@
 package com.example.stockmonitor.service;
 
 import com.example.stockmonitor.model.Portfolio;
-import com.example.stockmonitor.model.dtos.PortfolioDTO;
 import com.example.stockmonitor.repository.PortfolioRepository;
 import java.util.List;
 import java.util.Optional;
@@ -16,18 +15,20 @@ public class PortfolioService {
         this.portfolioRepository = portfolioRepository;
     }
 
-    public List<PortfolioDTO> findAll() {
-        return portfolioRepository.findAll().stream()
-                .map(PortfolioDTO::new).toList();
+    public List<Portfolio> findAll() {
+        return portfolioRepository.findAll();
     }
 
-    public Optional<PortfolioDTO> findById(Long id) {
-        return portfolioRepository.findById(id)
-                .map(PortfolioDTO::new);
+    public Optional<Portfolio> findById(Long id) {
+        return portfolioRepository.findById(id);
     }
 
-    public PortfolioDTO save(Portfolio portfolio) {
-        return new PortfolioDTO(portfolioRepository.save(portfolio));
+    public Portfolio create(Portfolio portfolio) {
+        return portfolioRepository.create(portfolio);
+    }
+
+    public Portfolio update(Portfolio portfolio) {
+        return portfolioRepository.update(portfolio);
     }
 
     public void delete(Long id) {
