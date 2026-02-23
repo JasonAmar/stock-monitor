@@ -6,12 +6,12 @@ import java.math.BigDecimal;
 import java.sql.PreparedStatement;
 import java.sql.Statement;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
-import java.util.stream.Collectors;
 
 import org.springframework.dao.DataAccessException;
 import org.springframework.dao.EmptyResultDataAccessException;
@@ -152,10 +152,24 @@ public class PortfolioRepository {
 
     private List<Holding> findHoldingsByPortfolioId(Long portfolioId) {
         String holdingsSql = """
-                SELECT h.id, fi.symbol, h.quantity
+                SELECT h.id,
+                       fi.symbol,
+                       h.quantity,
+                       lp.price AS latest_price
                 FROM holdings h
                 INNER JOIN financial_instruments fi
                     ON fi.id = h.financial_instrument_id
+                LEFT JOIN (
+                    SELECT sp.financial_instrument_id,
+                           sp.price,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY sp.financial_instrument_id
+                               ORDER BY sp.timestamp DESC, sp.id DESC
+                           ) AS row_num
+                    FROM stock_prices sp
+                ) lp
+                    ON lp.financial_instrument_id = h.financial_instrument_id
+                   AND lp.row_num = 1
                 WHERE h.portfolio_id = ?
                 ORDER BY h.id
                 """;
@@ -165,6 +179,7 @@ public class PortfolioRepository {
             holding.setId(rs.getLong("id"));
             holding.setSymbol(rs.getString("symbol"));
             holding.setQuantity(rs.getBigDecimal("quantity"));
+            holding.setLatestPrice(rs.getBigDecimal("latest_price"));
             holding.setPortfolioId(portfolioId);
             return holding;
         }, portfolioId);
@@ -177,10 +192,31 @@ public class PortfolioRepository {
                 return new ArrayList<>();
             }
 
+            Map<String, BigDecimal> requestedBySymbol = new LinkedHashMap<>();
+            for (Holding holding : holdings) {
+                String symbol = holding.getSymbol();
+                if (symbol == null || symbol.isBlank()) {
+                    throw new IllegalArgumentException("Holding symbol is required");
+                }
+
+                BigDecimal quantity = holding.getQuantity() != null ? holding.getQuantity() : BigDecimal.ZERO;
+                BigDecimal existingQuantity = requestedBySymbol.putIfAbsent(symbol, quantity);
+                if (existingQuantity != null) {
+                    throw new IllegalArgumentException("Duplicate holding symbol: " + symbol);
+                }
+            }
+
             List<Holding> existingHoldings = findHoldingsByPortfolioId(portfolioId);
-            Map<String, Holding> existingBySymbol = existingHoldings.stream()
-                    .collect(Collectors.toMap(Holding::getSymbol, holding -> holding));
-            Set<String> requestedSymbols = new LinkedHashSet<>();
+            Map<String, Holding> existingBySymbol = new LinkedHashMap<>();
+            for (Holding existingHolding : existingHoldings) {
+                existingBySymbol.put(existingHolding.getSymbol(), existingHolding);
+            }
+            Set<String> requestedSymbols = new LinkedHashSet<>(requestedBySymbol.keySet());
+
+            List<Object[]> updateArgs = new ArrayList<>();
+            List<Object[]> insertArgs = new ArrayList<>();
+            List<String> insertedSymbols = new ArrayList<>();
+            List<Object[]> deleteArgs = new ArrayList<>();
 
             String updateSql = """
                     UPDATE holdings
@@ -196,36 +232,47 @@ public class PortfolioRepository {
                     WHERE fi.symbol = ?
                     """;
 
-            for (Holding holding : holdings) {
-                String symbol = holding.getSymbol();
-                if (symbol == null || symbol.isBlank()) {
-                    throw new IllegalArgumentException("Holding symbol is required");
-                }
-                if (!requestedSymbols.add(symbol)) {
-                    throw new IllegalArgumentException("Duplicate holding symbol: " + symbol);
-                }
+            String deleteSql = """
+                    DELETE FROM holdings
+                    WHERE id = ?
+                      AND portfolio_id = ?
+                    """;
 
-                BigDecimal quantity = holding.getQuantity() != null ? holding.getQuantity() : BigDecimal.ZERO;
+            for (Map.Entry<String, BigDecimal> requestedEntry : requestedBySymbol.entrySet()) {
+                String symbol = requestedEntry.getKey();
+                BigDecimal quantity = requestedEntry.getValue();
                 Holding existingHolding = existingBySymbol.get(symbol);
                 if (existingHolding != null) {
-                    int updatedRows = jdbcTemplate.update(updateSql, quantity, existingHolding.getId(), portfolioId);
-                    if (updatedRows == 0) {
-                        throw new IllegalStateException("Failed to update holding id: " + existingHolding.getId());
-                    }
+                    updateArgs.add(new Object[]{quantity, existingHolding.getId(), portfolioId});
                     continue;
                 }
 
-                int insertedRows = jdbcTemplate.update(insertSql, portfolioId, quantity, symbol);
-                if (insertedRows == 0) {
-                    throw new IllegalArgumentException("Unknown symbol for holding: " + symbol);
+                insertArgs.add(new Object[]{portfolioId, quantity, symbol});
+                insertedSymbols.add(symbol);
+            }
+
+            if (!updateArgs.isEmpty()) {
+                jdbcTemplate.batchUpdate(updateSql, updateArgs);
+            }
+
+            if (!insertArgs.isEmpty()) {
+                int[] insertedRows = jdbcTemplate.batchUpdate(insertSql, insertArgs);
+                for (int i = 0; i < insertedRows.length; i++) {
+                    if (insertedRows[i] == 0) {
+                        throw new IllegalArgumentException("Unknown symbol for holding: " + insertedSymbols.get(i));
+                    }
                 }
             }
 
             for (Holding existingHolding : existingHoldings) {
-                if (!requestedSymbols.contains(existingHolding.getSymbol())) {
-                    jdbcTemplate.update("DELETE FROM holdings WHERE id = ? AND portfolio_id = ?",
-                            existingHolding.getId(), portfolioId);
+                if (requestedSymbols.contains(existingHolding.getSymbol())) {
+                    continue;
                 }
+                deleteArgs.add(new Object[]{existingHolding.getId(), portfolioId});
+            }
+
+            if (!deleteArgs.isEmpty()) {
+                jdbcTemplate.batchUpdate(deleteSql, deleteArgs);
             }
 
             return findHoldingsByPortfolioId(portfolioId);

@@ -11,5 +11,6 @@ public class Holding {
     private Long id;
     private String symbol;
     private BigDecimal quantity;
+    private BigDecimal latestPrice;
     private Long portfolioId;
 }
